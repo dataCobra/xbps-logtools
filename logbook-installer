@@ -87,9 +87,9 @@ do_n_log() {
     TMPFILE2=`tempfile "$TMPFILE2"` || exit 1
     TMPFILE3=`tempfile "$TMPFILE3"` || exit 1
 
-    xbps-query -l | awk '$1 ~ /^ii$/ { $2 }' > "$TMPFILE2"
+    xbps-query -l | awk '$1 ~ /^ii$/ { print $2 }' > "$TMPFILE2"
     xbps-"$@"
-    xbps-query -l | awk '$1 ~ /^ii$/ { $2 }' > "$TMPFILE3"
+    xbps-query -l | awk '$1 ~ /^ii$/ { print $2 }' > "$TMPFILE3"
 
     cmp -s "$TMPFILE2" "$TMPFILE3" && return 1
     {
