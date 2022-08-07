@@ -1,0 +1,204 @@
+#!/bin/bash
+#
+# Copyright (C) 2022 by Benedikt Brinkmann
+# Authors:
+# Benedikt Brinkmann <benedikt@thinkbot.de>
+#
+# Based on the logbuch-tools from Intevation GmbH
+# https://hg.intevation.de/adminton
+#
+# This program is free software under the GPL (>=v3)
+# Read the file COPYING coming with the software for details.
+
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+LOGBOOK="${LOGBOOK:-/etc/logbook.txt}"
+TMPFILE1=""
+TMPFILE2=""
+
+init() {
+    if [ ! -f "$LOGBOOK" ] ; then
+        {
+            echo "Logbook for ${LOGBOOK_HOST:-`hostname`}"
+            echo
+            echo -e "`date +'%Y.%m.%d'`\t${LOGBOOK_USER:-${EMAIL:-${LOGNAME:-?}}}"
+            echo "* $LOGBOOK created"
+            echo "* Installed Packages:"
+            xbps-query -l | awk '$1 ~ /^ii$/ { print " ", $2 }'
+        } >> "$LOGBOOK" || exit $?
+    fi
+
+    VI="`type -p vim`"
+    test "$VI" || VI="`type -p vi`"
+
+    EMACS="`type -p emacs`"
+
+    if [ -z "$VI" -a -z "$EMACS" ] ; then
+        echo "Please install 'vim', another vi-like editor or the emacs." >&2
+        exit 1
+    fi
+
+    if [ ! -w "$LOGBOOK" ] ; then
+        echo "Error: no write access to $LOGBOOK" >&2
+        exit 1
+    fi
+}
+
+# format_diff pre-install-pkg-list post-install-pkg-list
+format_diff() {
+diff --unchanged-group-format='' \
+--changed-group-format='@UPDATE:
+%<@---
+%>@END UPDATE
+' \
+--new-group-format='@NEW:
+%>@END NEW
+' \
+--old-group-format='@REMOVED:
+%<@END REMOVED
+' \
+--old-line-format='- %l
+' \
+--new-line-format='+ %l
+' \
+"$1" "$2" | \
+awk 'function reset()
+{
+  oi=0; delete opkgs;
+  ni=0; delete npkgs;
+}
+/^@UPDATE:/{ prefix="  Updated"; reset() }
+/^@---/{ }
+/^@END UPDATE/{ for (i in npkgs) { print prefix, npkgs[i], "=> (" opkgs[i] ")" }}
+/^@NEW:/{ prefix="  Installed"; reset() }
+/^@END NEW/{ for (i in npkgs) { print prefix, npkgs[i]}}
+/^@REMOVED:/{ prefix="  Removed"; reset() }
+/^@END REMOVED/{ for (i in opkgs) { print prefix, opkgs[i]}}
+/^-/{opkgs[++oi]=$2;}
+/^\+/{npkgs[++ni]=$2;}
+'
+}
+
+# do_n_log options
+#
+#  Invoke "xbps-" with $options and put changes to the package list in
+#  the logbook.
+do_n_log() {
+    TMPFILE2=`tempfile "$TMPFILE2"` || exit 1
+    TMPFILE3=`tempfile "$TMPFILE3"` || exit 1
+
+    xbps-query -l | awk '$1 ~ /^ii$/ { $2 }' > "$TMPFILE2"
+    xbps-"$@"
+    xbps-query -l | awk '$1 ~ /^ii$/ { $2 }' > "$TMPFILE3"
+
+    cmp -s "$TMPFILE2" "$TMPFILE3" && return 1
+    {
+        echo -e "`date +'%Y.%m.%d'`\t${LOGBOOK_USER:-${EMAIL:-${LOGNAME:-?}}}"
+        echo -n "* xbps-$@"
+        if ! cmp -s "$TMPFILE2" "$TMPFILE3" ; then
+            echo ":"
+            format_diff "$TMPFILE2" "$TMPFILE3"
+        else
+          echo
+        fi
+        echo
+    } > "$TMPFILE1"
+}
+
+edit_logbook() {
+    unset DISPLAY
+    DATEPATTERN='^[0-9]*\.[0-9]*\.[0-9]*'
+    if [ "$EMACS" -a \( -z "$VI" -o "$EDITOR" = "emacs" \) ] ; then
+      $EMACS -eval "(progn (find-file \"$LOGBOOK\")
+                           (search-forward-regexp \"^[0-9]+\\\\.[0-9]+\\\\.[0-9]+\")
+                           (move-beginning-of-line 1)
+                           (insert-file-contents \"$TMPFILE1\"))"
+    else
+      $VI -c "1;/$DATEPATTERN/-1;r $TMPFILE1" "$LOGBOOK"
+    fi
+}
+
+delete_tmpfile() {
+    if [ -n "$TMPFILE1" ] ; then
+        rm -f "$TMPFILE1" && TMPFILE1=""
+    fi
+    if [ -n "$TMPFILE2" ] ; then
+        rm -f "$TMPFILE2" && TMPFILE2=""
+    fi
+}
+
+cleanup() {
+    echo "Aborted."
+    delete_tmpfile
+    exit 0
+}
+
+tempfile() {
+    if [ -n "$1" ] ; then
+        echo "$1"
+    else
+        mktemp "/tmp/logbook.XXXXXXXXXX"
+    fi
+}
+
+init "$@"
+
+TMPFILE1=`tempfile "$TMPFILE1"` && {
+    trap "cleanup" 1 2 3 7 10 13 15
+    case "`basename \"$0\"`" in
+        logbook)
+            {
+                echo -e "`date +'%Y.%m.%d'`\t${LOGBOOK_USER:-${EMAIL:-${LOGNAME:-?}}}"
+                echo "* $@"
+                echo
+            } > "$TMPFILE1"
+            edit_logbook
+            ;;
+        xbpsupg)
+            do_n_log install -Su && \
+            edit_logbook
+            ;;
+        xbpsins)
+            do_n_log install -S "$@" && \
+            edit_logbook
+            ;;
+        xbpsrm)
+            do_n_log remove "$@" && \
+            edit_logbook
+            ;;
+        xbpsrdp)
+            do_n_log remove -R "$@" && \
+            edit_logbook
+            ;;
+        xbpsrop)
+            do_n_log remove -o && \
+            edit_logbook
+            ;;
+        logbook-installer)
+            INSTALL_PATH="${1:-/usr/local/bin}"
+            REMOVE_PATH="/usr/local/sbin"
+            TOOLS="xbpsupg xbpsins xbpsrm xbpsrdp xbpsrop"
+            echo "Installing logbook tools to $INSTALL_PATH"
+            cp "$0" "$INSTALL_PATH/logbook"
+            chmod 755 "$INSTALL_PATH/logbook"
+            for tool in $TOOLS; do
+                [ $# -eq 0 -a -e "$REMOVE_PATH/$tool" ] && rm "$REMOVE_PATH/$tool"
+                ln -sf logbook "$INSTALL_PATH/$tool"
+            done
+            [ $# -eq 0 -a -e "$REMOVE_PATH/logbook" ] && rm "$REMOVE_PATH/logbook"
+            {
+                echo -e "`date +'%Y.%m.%d'`\t${LOGBOOK_USER:-${EMAIL:-${LOGNAME:-?}}}"
+                echo "* Logbook tools created in $INSTALL_PATH"
+                echo
+            } > "$TMPFILE1"
+            edit_logbook
+            ;;
+        *)
+            echo "Not implemented: $0" >&2
+            exit 1
+            ;;
+    esac
+    delete_tmpfile
+}
+
+exit 0
