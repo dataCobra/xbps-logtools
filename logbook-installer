@@ -69,7 +69,7 @@ awk 'function reset()
 }
 /^@UPDATE:/{ prefix="  Updated"; reset() }
 /^@---/{ }
-/^@END UPDATE/{ for (i in npkgs) { print prefix, npkgs[i], "=> (" opkgs[i] ")" }}
+/^@END UPDATE/{ for (i in npkgs) { print prefix, npkgs[i], "<= (" opkgs[i] ")" }}
 /^@NEW:/{ prefix="  Installed"; reset() }
 /^@END NEW/{ for (i in npkgs) { print prefix, npkgs[i]}}
 /^@REMOVED:/{ prefix="  Removed"; reset() }
